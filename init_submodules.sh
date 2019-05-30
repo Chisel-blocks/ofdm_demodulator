@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #Init submodules in this dir, if any
 DIR="$( cd "$( dirname $0 )" && pwd )"
+git submodule sync
 git submodule update --init
 
 #Publish local the ones you need
@@ -24,18 +25,17 @@ git submodule update --init
 #sbt assembly
 
 #Recursively init submodules
-#SUBMODULES="\
-#    f2_dsp \
-#    f2_cm_serdes_lane \
-#    "
-#for module in $SUBMODULES; do
-#    cd ${DIR}/${module}
-#    if [ -f "./init_submodules.sh" ]; then
-#        ./init_submodules.sh
-#    fi
-#    sbt publishLocal
-#    cd ${DIR}
-#done
+SUBMODULES="\
+    FFT \
+    "
+for module in $SUBMODULES; do
+    cd ${DIR}/${module}
+    if [ -f "./init_submodules.sh" ]; then
+        ./init_submodules.sh
+    fi
+    sbt publishLocal
+    cd ${DIR}
+done
 
 
 exit 0
