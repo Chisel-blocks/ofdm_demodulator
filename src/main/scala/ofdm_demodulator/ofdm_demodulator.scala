@@ -4,8 +4,9 @@
 // Inititally written by dsp-blocks initmodule.sh, 20190522
 package ofdm_demodulator
 
-import chisel3.experimental._
 import chisel3._
+import chisel3.experimental._
+import chisel3.util.{ ShiftRegister }
 import dsptools.{DspTester, DspTesterOptionsManager, DspTesterOptions}
 import dsptools.numbers._
 import breeze.math.Complex
@@ -20,7 +21,8 @@ class ofdm_demodulator_io(
                 SInt((n).W)
             ) 
         )
-        val symbol_sync = Input(Bool()) 
+        val symbol_sync_in = Input(Bool()) 
+        val symbol_sync_out = Output(Bool()) 
 
         val Z = Output(DspComplex(
                 SInt((n).W),
@@ -28,7 +30,6 @@ class ofdm_demodulator_io(
             )
         )
 
-        val equalize_sync=Input(Bool()) //Rising edge resets equalization counters
         override def cloneType = (new ofdm_demodulator_io(
                 n=n,
                 symbol_length=symbol_length,
@@ -39,40 +40,66 @@ class ofdm_demodulator_io(
 
 class ofdm_demodulator[T <:Data] (
         n: Int, 
-        symbol_length: Int, 
-        cyclic_prefix_length: Int) 
+        symbol_length: Int ) 
     extends Module {
-    val io = IO(new ofdm_demodulator_io( n=n, symbol_length=symbol_length ))
-    val register=RegInit(0.U.asTypeOf(io.A))
-    register:=io.A
-    io.Z:=register
+        val io = IO(new ofdm_demodulator_io( n=n, symbol_length=symbol_length))
+        val register=RegInit(0.U.asTypeOf(io.A))
+        register:=io.A
+        io.Z:=register
 
-    val fftConfig = FixedFFTConfig(
-    IOWidth       = n, 
-    binaryPoint   = 1,
-    n             = symbol_length,
-    pipelineDepth = 0,
-    lanes         = symbol_length,
-    quadrature    = false,
-    inverse       = false, // do inverse fft when true
-    unscrambleOut = true, //  correct output bit-order, only functional when (n=lanes)
-    unscrambleIn  = false   // accept srambled input
-  )
- 
-    val fft=Module( new FFT(fftConfig)) 
-    fft.io.in.bits.map(_.real:=io.A.real.asFixedPoint(1.BP))
-    fft.io.in.bits.map(_.imag:=io.A.imag.asFixedPoint(1.BP))
-    fft.io.in.sync:=io.symbol_sync
-    fft.io.in.valid:=true.B
-    fft.io.data_set_end_clear:=false.B
+        val fftConfig = FixedFFTConfig(
+            IOWidth       = n, 
+            binaryPoint   = 1,
+            n             = symbol_length,
+            pipelineDepth = 0,
+            lanes         = symbol_length,
+            quadrature    = false,
+            inverse       = false, // do inverse fft when true
+            unscrambleOut = true,  //  correct output bit-order, 
+                                   // only functional when (n=lanes)
+            unscrambleIn  = false  // accept srambled input
+        )
+     
+        val fft=Module( new FFT(fftConfig)).io
+        fft.in.bits.map(_:=register.asTypeOf(fft.in.bits(0)))
+        val r_fft_sync=ShiftRegister(io.symbol_sync_in,symbol_length)
+        fft.in.sync:= r_fft_sync 
+        //Does nothing?
+        fft.in.valid:= true.B
+        fft.data_set_end_clear:=false.B
 
+        //Serial-to-parllel the input
+        val serpa=RegInit(VecInit(Seq.fill(symbol_length){0.U.asTypeOf(io.A)}))
 
-}
+        serpa(0):=io.A
+        for ( i <- 0 to serpa.length-2) {
+            serpa(i+1):=serpa(i)
+        }
+        when( r_fft_sync ) {
+            (fft.in.bits,serpa).zipped.map(_:=_.asTypeOf(fft.in.bits(0)))
+        }.otherwise {
+            fft.in.bits.map(_:=0.U.asTypeOf(fft.in.bits(0)))
+        }
+
+        // Parallel-to-serial the FFT output
+        val parse=RegInit(VecInit(Seq.fill(symbol_length){0.U.asTypeOf(io.A)}))
+        when( fft.out.sync ) {
+            (parse,fft.out.bits).zipped.map(_:=_.asTypeOf(parse(0)))
+        }.otherwise {
+            parse(0):=0.U.asTypeOf(parse(0))
+            for ( i <- 0 to parse.length-2) {
+                parse(i+1):=parse(i)
+            }
+        }
+        io.symbol_sync_out:=RegNext(fft.out.sync)
+        io.Z:=parse.last
+} 
+
 
 //This gives you verilog
 object ofdm_demodulator extends App {
     chisel3.Driver.execute(args, () => new ofdm_demodulator(
-        n=8, symbol_length=64, cyclic_prefix_length=16)
+        n=8, symbol_length=64)
     )
 }
 
