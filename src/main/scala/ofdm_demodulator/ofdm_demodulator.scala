@@ -6,7 +6,7 @@ package ofdm_demodulator
 
 import chisel3._
 import chisel3.experimental._
-import chisel3.util.{ ShiftRegister }
+import chisel3.util.{ShiftRegister, log2Ceil}
 import dsptools.{DspTester, DspTesterOptionsManager, DspTesterOptions}
 import dsptools.numbers._
 import breeze.math.Complex
@@ -46,12 +46,12 @@ class ofdm_demodulator[T <:Data] (
         val register=RegInit(0.U.asTypeOf(io.A))
         register:=io.A
         io.Z:=register
-
+        val pipestages=log2Ceil(symbol_length)
         val fftConfig = FixedFFTConfig(
             IOWidth       = n, 
-            binaryPoint   = 1,
+            binaryPoint   = 4,
             n             = symbol_length,
-            pipelineDepth = 0,
+            pipelineDepth = pipestages,
             lanes         = symbol_length,
             quadrature    = false,
             inverse       = false, // do inverse fft when true
