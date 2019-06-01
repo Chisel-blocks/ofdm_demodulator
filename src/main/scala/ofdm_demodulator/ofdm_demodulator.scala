@@ -48,8 +48,8 @@ class ofdm_demodulator[T <:Data] (
         io.Z:=register
         val pipestages=log2Ceil(symbol_length)
         val fftConfig = FixedFFTConfig(
-            IOWidth       = n, 
-            binaryPoint   = 4,
+            IOWidth       = 2*n, 
+            binaryPoint   = n,
             n             = symbol_length,
             pipelineDepth = pipestages,
             lanes         = symbol_length,
@@ -65,41 +65,46 @@ class ofdm_demodulator[T <:Data] (
         val r_fft_sync=ShiftRegister(io.symbol_sync_in,symbol_length)
         fft.in.sync:= r_fft_sync 
         //Does nothing?
-        fft.in.valid:= true.B
+        fft.in.valid:= RegNext(r_fft_sync)
         fft.data_set_end_clear:=false.B
 
         //Serial-to-parllel the input
         val serpa=RegInit(VecInit(Seq.fill(symbol_length){0.U.asTypeOf(io.A)}))
+        val serpareg=RegInit(VecInit(Seq.fill(symbol_length){0.U.asTypeOf(fft.in.bits(0))}))
 
-        serpa(0):=io.A
-        for ( i <- 0 to serpa.length-2) {
-            serpa(i+1):=serpa(i)
+        serpa.last:=io.A
+        for ( i <- (1 until serpa.length).reverse) {
+            serpa(i-1):=serpa(i)
         }
         when( r_fft_sync ) {
-            (fft.in.bits,serpa).zipped.map(_:=_.asTypeOf(fft.in.bits(0)))
+            (serpareg,serpa).zipped.map(_.real:=_.real.asTypeOf(serpareg(0).real))
+            (serpareg,serpa).zipped.map(_.imag:=_.imag.asTypeOf(serpareg(0).imag))
         }.otherwise {
-            fft.in.bits.map(_:=0.U.asTypeOf(fft.in.bits(0)))
         }
+
+        (fft.in.bits,serpareg).zipped.map(_:=_)
 
         // Parallel-to-serial the FFT output
         val parse=RegInit(VecInit(Seq.fill(symbol_length){0.U.asTypeOf(io.A)}))
         when( fft.out.sync ) {
-            (parse,fft.out.bits).zipped.map(_:=_.asTypeOf(parse(0)))
+            (parse,fft.out.bits).zipped.map(_.real:=_.real.asTypeOf(parse(0).real))
+            (parse,fft.out.bits).zipped.map(_.imag:=_.imag.asTypeOf(parse(0).imag))
         }.otherwise {
-            parse(0):=0.U.asTypeOf(parse(0))
-            for ( i <- 0 to parse.length-2) {
-                parse(i+1):=parse(i)
+            parse.last:=0.U.asTypeOf(parse(0))
+            // Reverse to get bin 0 out first
+            for ( i <- (1 until parse.length).reverse) {
+                parse(i-1):=parse(i)
             }
         }
         io.symbol_sync_out:=RegNext(fft.out.sync)
-        io.Z:=parse.last
+        io.Z:=parse(0)
 } 
 
 
 //This gives you verilog
 object ofdm_demodulator extends App {
     chisel3.Driver.execute(args, () => new ofdm_demodulator(
-        n=8, symbol_length=64)
+        n=16, symbol_length=64)
     )
 }
 
